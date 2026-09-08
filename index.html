@@ -406,7 +406,6 @@
       <div class="count-label">registros hoy</div>
     </div>
     <div id="last-scan"><strong>Último:</strong><span id="last-scan-text">Ninguno todavía — apunta la cámara a un QR</span></div>
-    <div id="debug-info" style="margin-top:10px;font-size:11px;color:rgba(235,235,245,0.45);font-family:monospace;line-height:1.6;"></div>
   </div>
 
   <div id="toast">
@@ -10639,38 +10638,19 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
   }
 
   // ---------- Loop de escaneo ----------
-  const debugInfo = document.getElementById('debug-info');
-  let frameCount = 0, lastFpsTime = Date.now(), fps = 0, lastError = '';
-
   function scanLoop() {
     if (!state.scanning) return;
 
-    try {
-      if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+    if (video.readyState === video.HAVE_ENOUGH_DATA && video.videoWidth > 0) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
 
-        frameCount++;
-        if (Date.now() - lastFpsTime > 1000) {
-          fps = frameCount;
-          frameCount = 0;
-          lastFpsTime = Date.now();
-        }
-
-        if (code && code.data && Date.now() > state.cooldownUntil) {
-          handleScan(code.data);
-        }
-
-        debugInfo.textContent = `video: ${video.videoWidth}x${video.videoHeight} · fps: ${fps} · readyState: ${video.readyState}${lastError ? ' · err: ' + lastError : ''}`;
-      } else {
-        debugInfo.textContent = `esperando video… readyState: ${video.readyState}, w: ${video.videoWidth}`;
+      if (code && code.data && Date.now() > state.cooldownUntil) {
+        handleScan(code.data);
       }
-    } catch (err) {
-      lastError = err.message;
-      debugInfo.textContent = 'ERROR: ' + err.message;
     }
     requestAnimationFrame(scanLoop);
   }
@@ -10692,16 +10672,47 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
     sendToSheet(value);
   }
 
+  // ---------- Decodificación del QR (Base64 -> JSON) ----------
+  function decodeQrPayload(raw) {
+    // Devuelve { appUserId, acob, subevents, decodeOk, rawFallback }
+    try {
+      const decoded = atob(raw.trim());
+      const json = JSON.parse(decoded);
+      return {
+        appUserId: json.appUserId !== undefined ? String(json.appUserId) : '',
+        acob: json.acob !== undefined ? String(json.acob) : '',
+        subevents: Array.isArray(json.subevents) ? json.subevents.join(', ') : (json.subevents || ''),
+        decodeOk: true,
+        rawFallback: raw,
+      };
+    } catch (err) {
+      // No era Base64/JSON válido — se guarda tal cual llegó, sin tronar el flujo
+      return {
+        appUserId: '',
+        acob: '',
+        subevents: '',
+        decodeOk: false,
+        rawFallback: raw,
+      };
+    }
+  }
+
   // ---------- Envío a Google Sheets ----------
   function sendToSheet(qrContent) {
-    lastScanText.textContent = qrContent;
+    const payload = decodeQrPayload(qrContent);
+    lastScanText.textContent = payload.decodeOk
+      ? `ID ${payload.appUserId}`
+      : qrContent;
 
     fetch(state.scriptUrl, {
       method: 'POST',
       mode: 'no-cors', // Apps Script Web Apps no devuelven CORS estándar; usamos no-cors y confiamos en el POST
       headers: { 'Content-Type': 'text/plain;charset=utf-8' },
       body: JSON.stringify({
-        qrContent: qrContent,
+        appUserId: payload.appUserId,
+        acob: payload.acob,
+        subevents: payload.subevents,
+        rawQr: payload.rawFallback,
         deviceLabel: state.deviceLabel || 'Sin nombre',
       }),
     })
@@ -10709,7 +10720,7 @@ function findAlignmentPattern(matrix, alignmentPatternQuads, topRight, topLeft, 
       state.count++;
       countEl.textContent = state.count;
       localStorage.setItem('qr_count_' + todayKey(), state.count);
-      showToast('ok', 'Registrado en Sheets');
+      showToast('ok', payload.decodeOk ? `Registrado · ID ${payload.appUserId}` : 'Registrado (formato no reconocido)');
     })
     .catch(() => {
       showToast('error', 'Error de conexión — revisa tu Wi-Fi');
