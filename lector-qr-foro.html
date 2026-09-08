@@ -1,0 +1,672 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1">
+<title>Foro Automotriz — Lector QR</title>
+<link rel="apple-touch-icon" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<style>
+  :root {
+    --bg: #000000;
+    --surface: rgba(28, 28, 30, 0.72);
+    --surface-solid: #1c1c1e;
+    --accent: #0A84FF;
+    --success: #30D158;
+    --danger: #FF453A;
+    --text-primary: rgba(255, 255, 255, 0.96);
+    --text-secondary: rgba(235, 235, 245, 0.6);
+    --hairline: rgba(255, 255, 255, 0.14);
+    --safe-top: env(safe-area-inset-top, 0px);
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+  }
+
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+  html, body {
+    margin: 0;
+    height: 100%;
+    overflow: hidden;
+    background: var(--bg);
+    font: 400 17px/1.4 -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    color: var(--text-primary);
+  }
+
+  #app {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ---------- Cámara ---------- */
+  #camera-wrap {
+    position: fixed;
+    inset: 0;
+    background: #000;
+  }
+  video {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+  }
+  canvas#processCanvas { display: none; }
+
+  /* Overlay de guía de escaneo */
+  #scan-frame {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: min(70vw, 320px);
+    height: min(70vw, 320px);
+    transform: translate(-50%, -50%);
+    pointer-events: none;
+  }
+  #scan-frame .corner {
+    position: absolute;
+    width: 34px;
+    height: 34px;
+    border: 3.5px solid var(--text-primary);
+    opacity: 0.9;
+    transition: border-color 180ms ease-out, opacity 180ms ease-out;
+  }
+  #scan-frame.hit .corner { border-color: var(--success); }
+  #scan-frame .tl { top: 0; left: 0; border-right: none; border-bottom: none; border-radius: 14px 0 0 0; }
+  #scan-frame .tr { top: 0; right: 0; border-left: none; border-bottom: none; border-radius: 0 14px 0 0; }
+  #scan-frame .bl { bottom: 0; left: 0; border-right: none; border-top: none; border-radius: 0 0 0 14px; }
+  #scan-frame .br { bottom: 0; right: 0; border-left: none; border-top: none; border-radius: 0 0 14px 0; }
+
+  #scan-line {
+    position: absolute;
+    left: 6%;
+    right: 6%;
+    height: 2px;
+    top: 4%;
+    background: linear-gradient(90deg, transparent, var(--accent), transparent);
+    box-shadow: 0 0 12px 1px var(--accent);
+    border-radius: 2px;
+    will-change: transform, opacity;
+  }
+
+  /* dimming outside the frame */
+  #dim {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background:
+      radial-gradient(ellipse min(70vw,320px) min(70vw,320px) at 50% 50%, transparent 0%, transparent 68%, rgba(0,0,0,0.55) 72%);
+  }
+
+  /* ---------- Top bar (translúcida) ---------- */
+  #topbar {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    padding: calc(var(--safe-top) + 14px) 18px 14px;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.55), transparent);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    z-index: 5;
+  }
+  #topbar .title {
+    font-size: 15px;
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    color: var(--text-primary);
+  }
+  #topbar .subtitle {
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-top: 1px;
+  }
+  #status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--danger);
+    display: inline-block;
+    margin-right: 6px;
+    transition: background 200ms ease;
+    box-shadow: 0 0 6px currentColor;
+  }
+  #status-dot.connected { background: var(--success); }
+
+  #settings-btn {
+    width: 38px; height: 38px;
+    border-radius: 50%;
+    background: rgba(120,120,128,0.32);
+    backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid rgba(255,255,255,0.15);
+    display: flex; align-items: center; justify-content: center;
+    color: var(--text-primary);
+    transition: transform 100ms ease-out, background 150ms ease-out;
+  }
+  #settings-btn:active { transform: scale(0.92); background: rgba(120,120,128,0.5); }
+
+  /* ---------- Bottom sheet: contador + últimos escaneos ---------- */
+  #bottom-sheet {
+    position: absolute;
+    left: 0; right: 0; bottom: 0;
+    padding: 18px 18px calc(var(--safe-bottom) + 18px);
+    background: var(--surface);
+    backdrop-filter: blur(28px) saturate(180%);
+    border-top: 1px solid var(--hairline);
+    border-radius: 22px 22px 0 0;
+    z-index: 5;
+    box-shadow: 0 -8px 30px rgba(0,0,0,0.35);
+  }
+  #bottom-sheet .grabber {
+    width: 36px; height: 5px;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.25);
+    margin: 0 auto 14px;
+  }
+  #counter-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    margin-bottom: 10px;
+  }
+  #counter-row .count {
+    font-size: 34px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    font-variant-numeric: tabular-nums;
+  }
+  #counter-row .count-label {
+    font-size: 13px;
+    color: var(--text-secondary);
+    font-weight: 500;
+  }
+  #last-scan {
+    font-size: 14px;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 10px 12px;
+    background: rgba(120,120,128,0.18);
+    border-radius: 12px;
+    min-height: 40px;
+    display: flex;
+    align-items: center;
+  }
+  #last-scan strong {
+    color: var(--text-primary);
+    font-weight: 600;
+    margin-right: 6px;
+    flex-shrink: 0;
+  }
+
+  /* ---------- Toast de confirmación ---------- */
+  #toast {
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%) scale(0.85);
+    opacity: 0;
+    z-index: 20;
+    background: rgba(28,28,30,0.85);
+    backdrop-filter: blur(24px) saturate(180%);
+    border: 1px solid rgba(255,255,255,0.12);
+    border-radius: 20px;
+    padding: 28px 34px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    pointer-events: none;
+    transition: opacity 220ms cubic-bezier(.32,.72,0,1), transform 220ms cubic-bezier(.32,.72,0,1);
+  }
+  #toast.show {
+    opacity: 1;
+    transform: translate(-50%, -50%) scale(1);
+  }
+  #toast .icon-circle {
+    width: 56px; height: 56px;
+    border-radius: 50%;
+    background: var(--success);
+    display: flex; align-items: center; justify-content: center;
+  }
+  #toast.error .icon-circle { background: var(--danger); }
+  #toast .icon-circle svg { width: 28px; height: 28px; }
+  #toast .msg {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text-primary);
+  }
+
+  /* ---------- Modal de configuración ---------- */
+  #config-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0);
+    z-index: 30;
+    display: flex;
+    align-items: flex-end;
+    pointer-events: none;
+    transition: background 260ms ease;
+  }
+  #config-overlay.open {
+    background: rgba(0,0,0,0.5);
+    pointer-events: auto;
+  }
+  #config-sheet {
+    width: 100%;
+    background: var(--surface-solid);
+    border-radius: 22px 22px 0 0;
+    padding: 20px 20px calc(var(--safe-bottom) + 24px);
+    transform: translateY(100%);
+    transition: transform 320ms cubic-bezier(.32,.72,0,1);
+    border-top: 1px solid var(--hairline);
+  }
+  #config-overlay.open #config-sheet { transform: translateY(0); }
+
+  #config-sheet .grabber {
+    width: 36px; height: 5px;
+    border-radius: 3px;
+    background: rgba(255,255,255,0.25);
+    margin: 0 auto 18px;
+  }
+  #config-sheet h2 {
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 4px;
+  }
+  #config-sheet .hint {
+    font-size: 13px;
+    color: var(--text-secondary);
+    margin: 0 0 20px;
+    line-height: 1.5;
+  }
+  .field-label {
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.02em;
+    color: var(--text-secondary);
+    margin: 0 0 6px 4px;
+  }
+  .field-input {
+    width: 100%;
+    padding: 13px 14px;
+    background: rgba(120,120,128,0.24);
+    border: 1px solid var(--hairline);
+    border-radius: 12px;
+    color: var(--text-primary);
+    font-size: 15px;
+    margin-bottom: 16px;
+    outline: none;
+    transition: border-color 150ms ease;
+  }
+  .field-input:focus { border-color: var(--accent); }
+  .field-input::placeholder { color: rgba(235,235,245,0.35); }
+
+  .btn {
+    width: 100%;
+    padding: 15px;
+    border-radius: 14px;
+    border: none;
+    font-size: 16px;
+    font-weight: 600;
+    text-align: center;
+    transition: transform 100ms ease-out, opacity 150ms ease-out;
+  }
+  .btn:active { transform: scale(0.97); }
+  .btn-primary { background: var(--accent); color: white; }
+  .btn-secondary {
+    background: rgba(120,120,128,0.24);
+    color: var(--text-primary);
+    margin-top: 10px;
+  }
+  .btn:disabled { opacity: 0.4; }
+
+  #conn-test-msg {
+    font-size: 13px;
+    text-align: center;
+    margin-top: 12px;
+    min-height: 16px;
+    font-weight: 500;
+  }
+  #conn-test-msg.ok { color: var(--success); }
+  #conn-test-msg.err { color: var(--danger); }
+
+  /* ---------- Estado inicial / permiso de cámara ---------- */
+  #permission-screen {
+    position: fixed;
+    inset: 0;
+    background: var(--bg);
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 32px;
+    text-align: center;
+  }
+  #permission-screen .icon-circle {
+    width: 84px; height: 84px;
+    border-radius: 50%;
+    background: rgba(10,132,255,0.18);
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 22px;
+  }
+  #permission-screen h1 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    margin: 0 0 10px;
+  }
+  #permission-screen p {
+    font-size: 15px;
+    color: var(--text-secondary);
+    max-width: 300px;
+    line-height: 1.5;
+    margin: 0 0 28px;
+  }
+  #permission-screen .btn { max-width: 280px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    #toast, #config-sheet { transition: opacity 200ms ease !important; transform: none !important; }
+  }
+</style>
+</head>
+<body>
+
+<div id="app">
+  <div id="camera-wrap">
+    <video id="video" playsinline autoplay muted></video>
+    <div id="dim"></div>
+    <div id="scan-frame">
+      <div class="corner tl"></div>
+      <div class="corner tr"></div>
+      <div class="corner bl"></div>
+      <div class="corner br"></div>
+      <div id="scan-line"></div>
+    </div>
+  </div>
+
+  <div id="topbar">
+    <div>
+      <div class="title">Foro Automotriz</div>
+      <div class="subtitle"><span id="status-dot"></span><span id="status-text">Sin conectar a Sheets</span></div>
+    </div>
+    <button id="settings-btn" aria-label="Configuración">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+    </button>
+  </div>
+
+  <div id="bottom-sheet">
+    <div class="grabber"></div>
+    <div id="counter-row">
+      <div><span class="count" id="count">0</span></div>
+      <div class="count-label">registros hoy</div>
+    </div>
+    <div id="last-scan"><strong>Último:</strong><span id="last-scan-text">Ninguno todavía — apunta la cámara a un QR</span></div>
+  </div>
+
+  <div id="toast">
+    <div class="icon-circle">
+      <svg id="toast-icon" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg>
+    </div>
+    <div class="msg" id="toast-msg">Registrado</div>
+  </div>
+</div>
+
+<div id="permission-screen">
+  <div class="icon-circle">
+    <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="#0A84FF" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M23 19a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h4l2-3h6l2 3h4a2 2 0 0 1 2 2z"></path><circle cx="12" cy="13" r="4"></circle></svg>
+  </div>
+  <h1>Activar cámara</h1>
+  <p>Se usará la cámara para leer las credenciales QR del foro. No se guarda ningún video ni foto.</p>
+  <button class="btn btn-primary" id="grant-camera">Activar cámara</button>
+</div>
+
+<div id="config-overlay">
+  <div id="config-sheet">
+    <div class="grabber"></div>
+    <h2>Conexión a Google Sheets</h2>
+    <p class="hint">Pega aquí la URL de tu Apps Script (termina en <code>/exec</code>). Se guarda solo en este dispositivo.</p>
+    <div class="field-label">URL del conector</div>
+    <input type="url" id="script-url" class="field-input" placeholder="https://script.google.com/macros/s/.../exec" autocapitalize="off" autocorrect="off" spellcheck="false">
+    <div class="field-label">Nombre de este dispositivo (opcional)</div>
+    <input type="text" id="device-label" class="field-input" placeholder="Ej. iPad Recepción, Tel. Daniel">
+    <button class="btn btn-primary" id="save-config">Guardar y probar conexión</button>
+    <button class="btn btn-secondary" id="close-config">Cerrar</button>
+    <div id="conn-test-msg"></div>
+  </div>
+</div>
+
+<canvas id="processCanvas"></canvas>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsqr/1.4.0/jsQR.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  // ---------- Estado ----------
+  const state = {
+    scriptUrl: localStorage.getItem('qr_script_url') || '',
+    deviceLabel: localStorage.getItem('qr_device_label') || '',
+    count: parseInt(localStorage.getItem('qr_count_' + todayKey()) || '0', 10),
+    lastValue: null,
+    scanning: false,
+    cooldownUntil: 0,
+    stream: null,
+  };
+
+  function todayKey() {
+    const d = new Date();
+    return d.getFullYear() + '-' + (d.getMonth() + 1) + '-' + d.getDate();
+  }
+
+  // ---------- Elementos ----------
+  const video = document.getElementById('video');
+  const canvas = document.getElementById('processCanvas');
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  const scanFrame = document.getElementById('scan-frame');
+  const scanLine = document.getElementById('scan-line');
+  const countEl = document.getElementById('count');
+  const lastScanText = document.getElementById('last-scan-text');
+  const statusDot = document.getElementById('status-dot');
+  const statusText = document.getElementById('status-text');
+  const toast = document.getElementById('toast');
+  const toastMsg = document.getElementById('toast-msg');
+  const toastIcon = document.getElementById('toast-icon');
+  const permissionScreen = document.getElementById('permission-screen');
+  const grantCameraBtn = document.getElementById('grant-camera');
+  const settingsBtn = document.getElementById('settings-btn');
+  const configOverlay = document.getElementById('config-overlay');
+  const closeConfigBtn = document.getElementById('close-config');
+  const saveConfigBtn = document.getElementById('save-config');
+  const scriptUrlInput = document.getElementById('script-url');
+  const deviceLabelInput = document.getElementById('device-label');
+  const connTestMsg = document.getElementById('conn-test-msg');
+
+  countEl.textContent = state.count;
+  scriptUrlInput.value = state.scriptUrl;
+  deviceLabelInput.value = state.deviceLabel;
+  updateConnStatus();
+
+  // ---------- Animación de línea de escaneo (spring simple, respeta reduced-motion) ----------
+  const prefersReduced = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  let scanLineProgress = 0;
+  let scanLineDir = 1;
+  function animateScanLine() {
+    if (!prefersReduced) {
+      scanLineProgress += 0.012 * scanLineDir;
+      if (scanLineProgress >= 1) { scanLineProgress = 1; scanLineDir = -1; }
+      if (scanLineProgress <= 0) { scanLineProgress = 0; scanLineDir = 1; }
+      const y = 4 + scanLineProgress * 92; // % dentro del marco
+      scanLine.style.transform = `translateY(${y}%)`;
+    }
+    requestAnimationFrame(animateScanLine);
+  }
+  requestAnimationFrame(animateScanLine);
+
+  // ---------- Cámara ----------
+  async function startCamera() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' }, width: { ideal: 1280 }, height: { ideal: 720 } },
+        audio: false,
+      });
+      state.stream = stream;
+      video.srcObject = stream;
+      await video.play();
+      permissionScreen.style.display = 'none';
+      state.scanning = true;
+      requestAnimationFrame(scanLoop);
+    } catch (err) {
+      permissionScreen.querySelector('p').textContent =
+        'No se pudo activar la cámara. Revisa los permisos de cámara para este navegador en Ajustes.';
+    }
+  }
+
+  grantCameraBtn.addEventListener('click', startCamera);
+  // Intento automático al cargar (algunos navegadores lo permiten sin gesto extra si ya se otorgó antes)
+  if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    navigator.permissions?.query?.({ name: 'camera' }).then((res) => {
+      if (res.state === 'granted') startCamera();
+    }).catch(() => {});
+  }
+
+  // ---------- Loop de escaneo ----------
+  function scanLoop() {
+    if (!state.scanning) return;
+
+    if (video.readyState === video.HAVE_ENOUGH_DATA) {
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
+
+      if (code && code.data && Date.now() > state.cooldownUntil) {
+        handleScan(code.data);
+      }
+    }
+    requestAnimationFrame(scanLoop);
+  }
+
+  function handleScan(value) {
+    state.cooldownUntil = Date.now() + 1800; // evita duplicados por lecturas repetidas del mismo QR
+    scanFrame.classList.add('hit');
+    setTimeout(() => scanFrame.classList.remove('hit'), 500);
+
+    // Haptic si está disponible (Android/algunos navegadores)
+    if (navigator.vibrate) navigator.vibrate(40);
+
+    if (!state.scriptUrl) {
+      showToast('error', 'Configura la conexión a Sheets primero');
+      openConfig();
+      return;
+    }
+
+    sendToSheet(value);
+  }
+
+  // ---------- Envío a Google Sheets ----------
+  function sendToSheet(qrContent) {
+    lastScanText.textContent = qrContent;
+
+    fetch(state.scriptUrl, {
+      method: 'POST',
+      mode: 'no-cors', // Apps Script Web Apps no devuelven CORS estándar; usamos no-cors y confiamos en el POST
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify({
+        qrContent: qrContent,
+        deviceLabel: state.deviceLabel || 'Sin nombre',
+      }),
+    })
+    .then(() => {
+      state.count++;
+      countEl.textContent = state.count;
+      localStorage.setItem('qr_count_' + todayKey(), state.count);
+      showToast('ok', 'Registrado en Sheets');
+    })
+    .catch(() => {
+      showToast('error', 'Error de conexión — revisa tu Wi-Fi');
+    });
+  }
+
+  // ---------- Toast ----------
+  let toastTimer = null;
+  function showToast(type, msg) {
+    clearTimeout(toastTimer);
+    toast.classList.remove('error');
+    if (type === 'error') {
+      toast.classList.add('error');
+      toastIcon.innerHTML = '<line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line>';
+    } else {
+      toastIcon.innerHTML = '<polyline points="20 6 9 17 4 12"></polyline>';
+    }
+    toastMsg.textContent = msg;
+    toast.classList.add('show');
+    toastTimer = setTimeout(() => toast.classList.remove('show'), 1100);
+  }
+
+  // ---------- Configuración ----------
+  function openConfig() {
+    scriptUrlInput.value = state.scriptUrl;
+    deviceLabelInput.value = state.deviceLabel;
+    connTestMsg.textContent = '';
+    connTestMsg.className = '';
+    configOverlay.classList.add('open');
+  }
+  function closeConfig() { configOverlay.classList.remove('open'); }
+
+  settingsBtn.addEventListener('click', openConfig);
+  closeConfigBtn.addEventListener('click', closeConfig);
+  configOverlay.addEventListener('click', (e) => { if (e.target === configOverlay) closeConfig(); });
+
+  saveConfigBtn.addEventListener('click', async () => {
+    const url = scriptUrlInput.value.trim();
+    const label = deviceLabelInput.value.trim();
+
+    if (!url || !url.includes('script.google.com')) {
+      connTestMsg.textContent = 'Pega una URL válida de Apps Script (.../exec)';
+      connTestMsg.className = 'err';
+      return;
+    }
+
+    connTestMsg.textContent = 'Probando conexión…';
+    connTestMsg.className = '';
+
+    try {
+      // Verificación simple: hacemos GET al doGet del script
+      await fetch(url, { method: 'GET', mode: 'no-cors' });
+      state.scriptUrl = url;
+      state.deviceLabel = label;
+      localStorage.setItem('qr_script_url', url);
+      localStorage.setItem('qr_device_label', label);
+      updateConnStatus();
+      connTestMsg.textContent = 'Conectado. Ya puedes escanear.';
+      connTestMsg.className = 'ok';
+      setTimeout(closeConfig, 900);
+    } catch (err) {
+      connTestMsg.textContent = 'No se pudo contactar la URL. Revisa que sea correcta.';
+      connTestMsg.className = 'err';
+    }
+  });
+
+  function updateConnStatus() {
+    if (state.scriptUrl) {
+      statusDot.classList.add('connected');
+      statusText.textContent = state.deviceLabel ? `Conectado · ${state.deviceLabel}` : 'Conectado a Sheets';
+    } else {
+      statusDot.classList.remove('connected');
+      statusText.textContent = 'Sin conectar a Sheets';
+    }
+  }
+
+  if (!state.scriptUrl) {
+    setTimeout(openConfig, 400);
+  }
+})();
+</script>
+</body>
+</html>
